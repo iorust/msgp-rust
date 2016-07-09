@@ -1,0 +1,11 @@
+[package]
+name = "msgp"
+version = "0.0.2"
+authors = ["Qing Yan <admin@zensh.com>"]
+description = "Byte message protocol for Rust."
+documentation = "https://iorust.github.io/msgp-rust/msgp_rust"
+homepage = "https://github.com/iorust/msgp-rust"
+repository = "https://github.com/iorust/msgp-rust.git"
+readme = "README.md"
+keywords = ["message", "byte", "pipelining", "protocol", "stream"]
+license = "MIT/Apache-2.0"
