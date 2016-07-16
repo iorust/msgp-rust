@@ -7,6 +7,10 @@ Byte message protocol for Rust.
 [![Coverage Status][coveralls-image]][coveralls-url]
 [![Crates downloads][downloads-image]][downloads-url]
 
+## Protocol
+
+![Byte message protocol](https://raw.githubusercontent.com/iorust/msgp-rust/master/msgp.png)
+
 ## API
 ### Documentation https://iorust.github.io/msgp-rust/msgp_rust
 
