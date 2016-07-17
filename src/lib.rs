@@ -8,22 +8,23 @@
 //! Byte message protocol for Rust.
 
 use std::ptr;
+use std::io::{Result, Error, ErrorKind};
 
-pub fn encode(val: &Vec<u8>) -> Vec<u8> {
+pub fn encode(val: &[u8]) -> Vec<u8> {
     let len: usize = val.len();
     assert!(len < 268435456);
 
     if len < 128 {
         let mut res: Vec<u8> = Vec::with_capacity(len + 1);
         res.push(len as u8);
-        copy_vec(val, &mut res, 1);
+        copy_to_vec(val, &mut res, 1, 0, val.len());
         return res;
     } else if len < 16384 {
         let mut res: Vec<u8> = Vec::with_capacity(len + 2);
         let len = len as u16;
         res.push(((len >> 7) | 0x80u16) as u8);
         res.push((len & 0x7Fu16) as u8);
-        copy_vec(val, &mut res, 2);
+        copy_to_vec(val, &mut res, 2, 0, val.len());
         return res;
     } else if len < 2097152 {
         let mut res: Vec<u8> = Vec::with_capacity(len + 3);
@@ -31,7 +32,7 @@ pub fn encode(val: &Vec<u8>) -> Vec<u8> {
         res.push((((len >> 14) & 0x7Fu32) as u8) | 0x80u8);
         res.push((((len >> 7) & 0x7Fu32) as u8) | 0x80u8);
         res.push((len & 0x7Fu32) as u8);
-        copy_vec(val, &mut res, 3);
+        copy_to_vec(val, &mut res, 3, 0, val.len());
         return res;
     } else {
         let mut res: Vec<u8> = Vec::with_capacity(len + 4);
@@ -40,43 +41,19 @@ pub fn encode(val: &Vec<u8>) -> Vec<u8> {
         res.push((((len >> 14) & 0x7Fu32) as u8) | 0x80u8);
         res.push((((len >> 7) & 0x7Fu32) as u8) | 0x80u8);
         res.push((len & 0x7Fu32) as u8);
-        copy_vec(val, &mut res, 4);
+        copy_to_vec(val, &mut res, 4, 0, val.len());
         return res;
     }
 }
 
-pub fn encode_slice(val: &[u8]) -> Vec<u8> {
-    let len: usize = val.len();
-    assert!(len < 2097152);
-
-    if len < 128 {
-        let mut res: Vec<u8> = Vec::with_capacity(len + 1);
-        res.push(len as u8);
-        res.extend_from_slice(val);
-        return res;
-    } else if len < 16384 {
-        let mut res: Vec<u8> = Vec::with_capacity(len + 2);
-        let len = len as u16;
-        res.push(((len >> 7) | 0x80u16) as u8);
-        res.push((len & 0x7Fu16) as u8);
-        res.extend_from_slice(val);
-        return res;
-    } else {
-        let mut res: Vec<u8> = Vec::with_capacity(len + 3);
-        let len = len as u32;
-        res.push((((len >> 14) & 0x7Fu32) as u8) | 0x80u8);
-        res.push((((len >> 7) & 0x7Fu32) as u8) | 0x80u8);
-        res.push((len & 0x7Fu32) as u8);
-        res.extend_from_slice(val);
-        return res;
+pub fn decode(val: &[u8]) -> Option<Vec<u8>> {
+    if val.len() == 0 {
+        return None;
     }
-}
-
-pub fn decode(val: &Vec<u8>) -> Option<Vec<u8>> {
-    if val.len() == 0 { return None; }
-    if let Some(res) = parse_buffer(val, 0) {
-        let mut buf: Vec<u8> = Vec::with_capacity(res.1 - res.0);
-        buf.extend_from_slice(&val[res.0..res.1]);
+    if let Ok(res) = parse_buffer(val, 0) {
+        let len: usize = res.1 - res.0;
+        let mut buf: Vec<u8> = Vec::with_capacity(len);
+        copy_to_vec(val, &mut buf, 0, res.0, len);
         return Some(buf);
     }
     return None;
@@ -87,7 +64,7 @@ pub fn decode(val: &Vec<u8>) -> Option<Vec<u8>> {
 pub struct Decoder {
     pos: usize,
     msg_start: usize,
-    msg_end:usize,
+    msg_end: usize,
     buf: Vec<u8>,
     res: Vec<Vec<u8>>,
 }
@@ -103,9 +80,9 @@ impl Decoder {
         }
     }
 
-    pub fn feed(&mut self, buf: &[u8]) {
+    pub fn feed(&mut self, buf: &[u8]) -> Result<usize> {
         self.buf.extend_from_slice(buf);
-        self.parse();
+        self.parse()
     }
 
     /// Reads a decoded massage buffer, will return `None` if no buffer decoded.
@@ -128,62 +105,74 @@ impl Decoder {
         self.res.len()
     }
 
-    fn prune_buf(&mut self) {
-        if self.pos == self.buf.len() {
-            self.pos = 0;
-            self.buf.clear();
-        }
-    }
-
-    fn parse(&mut self) {
-        if self.msg_end > self.buf.len() { return; }
-        if self.msg_start > self.pos {
-            let mut buf: Vec<u8> = Vec::with_capacity(self.msg_end - self.msg_start);
-            buf.extend_from_slice(&self.buf[self.msg_start..self.msg_end]);
-            self.res.push(buf);
-            self.pos = self.msg_end;
-            self.msg_start = self.msg_end;
-            return self.parse();
-        }
-        if self.buf.len() <= self.pos {
-            return self.prune_buf();
-        }
-
-        match parse_buffer(&self.buf, self.pos) {
-            Some((start, end)) => {
-                self.msg_start = start;
-                self.msg_end = end;
-                if start == end {
-                    self.pos = start;
+    fn parse(&mut self) -> Result<usize> {
+        let mut count: usize = 0;
+        while self.msg_end <= self.buf.len() {
+            if self.msg_start > self.pos {
+                let len: usize = self.msg_end - self.msg_start;
+                let mut buf: Vec<u8> = Vec::with_capacity(len);
+                if len > 0 {
+                    copy_to_vec(&self.buf, &mut buf, 0, self.msg_start, len);
                 }
-                self.parse();
+                count += 1;
+                self.res.push(buf);
+                self.pos = self.msg_end;
+                self.msg_start = self.msg_end;
             }
-            None => {}
+
+            if self.buf.len() == self.pos {
+                self.pos = 0;
+                self.msg_start = 0;
+                self.msg_end = 0;
+                self.buf.clear();
+                return Ok(count);
+            }
+
+            match parse_buffer(&self.buf, self.pos) {
+                Ok((0, 0)) => {}
+                Ok((start, end)) => {
+                    self.msg_start = start;
+                    self.msg_end = end;
+                }
+                Err(err) => {
+                    return Err(err);
+                }
+            }
         }
+
+        Ok(count)
     }
 }
 
-fn parse_buffer(buffer: &Vec<u8>, offset: usize) -> Option<(usize, usize)> {
+fn parse_buffer(buf: &[u8], pos: usize) -> Result<(usize, usize)> {
     let mut byte: u8 = 0;
-    let mut length: usize = 0;
-    let mut offset: usize = offset;
+    let mut total: usize = 0;
+    let mut pos: usize = pos;
     loop {
-        let len = *buffer.get(offset).unwrap() as usize;
-        offset += 1;
-        if len < 128 { return Some((offset, offset + length + len)); }
+        let len = unsafe { *buf.get_unchecked(pos) as usize };
+        pos += 1;
+        if len < 128 {
+            return Ok((pos, pos + total + len));
+        }
         byte += 1;
-        if byte >= 4 { panic!("Max buffer length must be small than 268435456"); }
-        if offset >= buffer.len() { return None; }
-        length = ((len & 0x7f) + length) * 128
+        if byte >= 4 {
+            return Err(Error::new(ErrorKind::InvalidData,
+                                  "Max buffer length must be small than 268435456"));
+        }
+        if pos >= buf.len() {
+            return Ok((0, 0));
+        }
+        total = ((len & 0x7f) + total) * 128;
     }
 }
 
-fn copy_vec(src: &Vec<u8>, dst: &mut Vec<u8>, index: usize) {
-    let len = src.len();
-    let dst_len = dst.len();
+fn copy_to_vec(src: &[u8], dst: &mut Vec<u8>, dst_start: usize, src_start: usize, count: usize) {
+    let len = dst.len();
     unsafe {
-        ptr::copy_nonoverlapping(src.as_ptr(), dst.get_unchecked_mut(index), len);
-        dst.set_len(dst_len + len);
+        ptr::copy_nonoverlapping(src.get_unchecked(src_start),
+                                 dst.get_unchecked_mut(dst_start),
+                                 count);
+        dst.set_len(len + count);
     }
 }
 
@@ -257,8 +246,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    // cargo test -- --ignored
     fn encode_len_lt_268435456() {
         let mut res = Vec::with_capacity(2097153 + 4);
         res.extend_from_slice(&[0x81u8, 0x80u8, 0x80u8, 0x01u8]);
@@ -280,7 +267,7 @@ mod tests {
     #[test]
     fn decoder_sim() {
         let mut decoder = Decoder::new();
-        decoder.feed(&encode(&vec![0xffu8; 16384]));
+        decoder.feed(&encode(&vec![0xffu8; 16384])).unwrap();
         assert_eq!(decoder.read().unwrap(), vec![0xffu8; 16384]);
     }
 }
