@@ -47,10 +47,15 @@ pub fn encode(val: &[u8]) -> Vec<u8> {
 }
 
 pub fn decode(val: &[u8]) -> Option<Vec<u8>> {
-    if val.len() == 0 {
+    let src_len = val.len();
+    if src_len == 0 {
         return None;
     }
+
     if let Ok(res) = parse_buffer(val, 0) {
+        if res.1 == 0 || res.1 > src_len {
+            return None;
+        }
         let len: usize = res.1 - res.0;
         let mut buf: Vec<u8> = Vec::with_capacity(len);
         copy_to_vec(val, &mut buf, 0, res.0, len);
@@ -256,6 +261,30 @@ mod tests {
         res.extend_from_slice(&[0xffu8, 0xffu8, 0xffu8, 0x7fu8]);
         res.append(&mut vec![0xffu8; 268435455]);
         assert_eq!(encode(&vec![0xffu8; 268435455]), res);
+    }
+
+    #[test]
+    fn decode_zero_buf() {
+        let res = decode((&vec![]));
+        assert_eq!(res, None);
+    }
+
+    #[test]
+    fn decode_half_prefix_buf() {
+        let res = decode((&vec![0x81u8, 0x80u8]));
+        assert_eq!(res, None);
+    }
+
+    #[test]
+    fn decode_half_buf() {
+        let res = decode((&vec![0x3u8, 0x01u8, 0x02u8]));
+        assert_eq!(res, None);
+    }
+
+    #[test]
+    fn decode_sim_buf() {
+        let res = decode((&vec![0x3u8, 0x01u8, 0x02u8, 0x03u8]));
+        assert_eq!(res.unwrap(), vec![0x01u8, 0x02u8, 0x03u8]);
     }
 
     #[test]

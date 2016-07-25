@@ -1,6 +1,6 @@
 [package]
 name = "msgp"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Qing Yan <admin@zensh.com>"]
 description = "Byte message protocol for Rust."
 documentation = "https://iorust.github.io/msgp-rust/msgp_rust"
